@@ -2,16 +2,21 @@
  * app.js
  * A Node.js + Express server using Sequelize to connect
  * to a Supabase Postgres DB (with SSL).
- * The primary key is a UUID, and we store a "frontend_id"
- * in the format "TW-XXXXXX".
+ * - id: a true UUID primary key
+ * - wallet_address: unique, so same address can't register twice
+ * - frontend_id: a "TW-XXXXXX" ID for display
  **************************************************************/
 require('dotenv').config(); // Loads .env variables
 
 const express = require('express');
+const cors = require('cors');         // <-- Import cors
 const { Sequelize, DataTypes } = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
+
+// 1) Allow CORS for all origins
+app.use(cors());               // <-- This allows requests from any origin
 app.use(express.json());
 
 // 1) Read the single DB_URL from environment
@@ -28,15 +33,14 @@ const sequelize = new Sequelize(DB_URL, {
   dialectOptions: {
     ssl: {
       require: true,
-      // For self-signed or no local CA, set to false:
+      // For self-signed or no local CA, you can set to false:
       rejectUnauthorized: false
     }
   }
 });
 
 // 3) Define the User model
-//    `id`: a real UUID primary key
-//    `frontend_id`: your custom "TW-XXXXXX" field
+//    `wallet_address` is unique, so no duplicates allowed.
 const User = sequelize.define('User', {
   id: {
     type: DataTypes.UUID,
@@ -46,6 +50,7 @@ const User = sequelize.define('User', {
   wallet_address: {
     type: DataTypes.STRING,
     allowNull: false,
+    unique: true, // important: ensures one wallet per user
   },
   referral_code: {
     type: DataTypes.STRING,
@@ -66,38 +71,38 @@ const User = sequelize.define('User', {
   },
   frontend_id: {
     type: DataTypes.STRING, // e.g., "TW-123456"
-    allowNull: true,        // you can make it NOT NULL if you prefer
+    allowNull: true,
   },
 }, {
-  tableName: 'users',  // match your actual DB table
+  tableName: 'users',
   timestamps: false,
 });
 
-// 4) Generate a short referral code & frontend_id
+// Generate a short referral code
 function generateReferralCode() {
   return uuidv4().slice(0, 8); // e.g. "abcd1234"
 }
 
+// Generate the "TW-XXXXXX" ID
 function generateFrontendId() {
-  // Generate a 6-digit random number between 100000 and 999999
+  // Generate 6-digit random number between 100000 and 999999
   const random6 = Math.floor(Math.random() * 900000) + 100000;
   return `TW-${random6}`;
 }
 
 /***************************************
- * 5) Express Routes
+ * Express Routes
  ***************************************/
 
-// Health check
+// Simple welcome route
 app.get('/', (req, res) => {
   res.send("Welcome to the Express Referral System!");
 });
 
 /**
  * POST /register
- * Body: { "wallet_address": "0x123..." }
- * Creates a new user with a unique UUID, a "TW-xxxxxx" frontend_id,
- * and a referral code. No referrer in this route.
+ * Body: { "wallet_address": "0xABC123" }
+ * Creates a new user if wallet_address not used before.
  */
 app.post('/register', async (req, res) => {
   try {
@@ -106,23 +111,28 @@ app.post('/register', async (req, res) => {
       return res.status(400).json({ error: "Missing wallet_address" });
     }
 
+    // Check if this wallet is already registered
+    const existingUser = await User.findOne({ where: { wallet_address } });
+    if (existingUser) {
+      return res.status(400).json({ error: "This wallet address is already registered." });
+    }
+
     const referral_code = generateReferralCode();
     const frontend_id = generateFrontendId();
 
-    // Create the user in DB
+    // Create the user
     const newUser = await User.create({
       wallet_address,
       referral_code,
       frontend_id
     });
 
-    // Example referral link (use your domain in production)
     const referralLink = `http://localhost:3000/referral/${newUser.referral_code}`;
 
     res.status(201).json({
       message: "User registered successfully",
-      user_uuid: newUser.id,          // internal UUID
-      frontend_id: newUser.frontend_id, // "TW-XXXXXX"
+      user_uuid: newUser.id,
+      frontend_id: newUser.frontend_id,
       wallet_address: newUser.wallet_address,
       referral_link: referralLink
     });
@@ -134,7 +144,7 @@ app.post('/register', async (req, res) => {
 
 /**
  * GET /referral/:referral_code
- * Retrieves the user who owns this referral code
+ * Fetches the user for the given referral_code.
  */
 app.get('/referral/:referral_code', async (req, res) => {
   try {
@@ -145,7 +155,6 @@ app.get('/referral/:referral_code', async (req, res) => {
       return res.status(404).json({ error: "Invalid referral code" });
     }
 
-    // Return both the internal UUID and the frontend ID
     res.json({
       user_uuid: user.id,
       frontend_id: user.frontend_id,
@@ -160,8 +169,7 @@ app.get('/referral/:referral_code', async (req, res) => {
 /**
  * POST /register-referred
  * Body: { "wallet_address": "0xNewUser", "referred_by": "0xReferrer" }
- * Creates a new user with a "TW-xxxxxx" frontend_id, 
- * increments the referrer's total_referrals by 1.
+ * Creates a user if wallet_address not used before, then increments the referrer's total_referrals by 1.
  */
 app.post('/register-referred', async (req, res) => {
   try {
@@ -170,6 +178,12 @@ app.post('/register-referred', async (req, res) => {
       return res
         .status(400)
         .json({ error: "Missing wallet_address or referred_by" });
+    }
+
+    // Check if this wallet is already registered
+    const existingUser = await User.findOne({ where: { wallet_address } });
+    if (existingUser) {
+      return res.status(400).json({ error: "This wallet address is already registered." });
     }
 
     // Check if the referrer exists
@@ -181,7 +195,7 @@ app.post('/register-referred', async (req, res) => {
     const referral_code = generateReferralCode();
     const frontend_id = generateFrontendId();
 
-    // Create the new user
+    // Create new user
     const newUser = await User.create({
       wallet_address,
       referral_code,
@@ -189,7 +203,7 @@ app.post('/register-referred', async (req, res) => {
       referred_by
     });
 
-    // Increment the referrer's total_referrals
+    // Increment referrer's total_referrals
     referrer.total_referrals += 1;
     await referrer.save();
 
@@ -208,11 +222,11 @@ app.post('/register-referred', async (req, res) => {
 });
 
 /***************************************
- * 6) Sync DB and Start Server
+ * Sync DB and Start Server
  ***************************************/
 (async () => {
   try {
-    // Sync models with DB (creates table/columns if not exist)
+    // Sync models with DB
     await sequelize.sync({ force: false });
     console.log("Database synced successfully!");
 
