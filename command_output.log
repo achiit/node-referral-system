@@ -1,1 +1,11 @@
 
+Command: shopt -s histappend
+Output:
+
+Exit Code: 0
+----
+Command: pwd
+Output:
+/Users/achintyasingh/Desktop/node-referral-system
+Exit Code: 0
+----
