@@ -100,6 +100,35 @@ app.get('/', (req, res) => {
 });
 
 /**
+ * GET /user/:wallet_address
+ * Fetches all user details for a given wallet_address
+ */
+app.get('/user/:wallet_address', async (req, res) => {
+  try {
+    const { wallet_address } = req.params;
+
+    const user = await User.findOne({ where: { wallet_address } });
+    if (!user) {
+      return res.status(404).json({ error: "User not found for that wallet address." });
+    }
+
+    // Return all user details you want to expose
+    res.json({
+      user_uuid: user.id,
+      frontend_id: user.frontend_id,
+      wallet_address: user.wallet_address,
+      referral_code: user.referral_code,
+      referred_by: user.referred_by,
+      total_referrals: user.total_referrals,
+      created_at: user.created_at
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * POST /register
  * Body: { "wallet_address": "0xABC123" }
  * Creates a new user if wallet_address not used before.
